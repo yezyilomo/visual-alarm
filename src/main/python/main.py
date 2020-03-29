@@ -1,12 +1,14 @@
-import datetime
-from ui import Notification
-import time
-
 import sys
+import time
+import datetime
+
 from PyQt5.QtWidgets import QSystemTrayIcon, QApplication, QMenu, QMainWindow, QWidget
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, QObject, QThread
 from fbs_runtime.application_context import ApplicationContext
+
+import config
+from ui import Notification
 
 
 class Preferences(QMainWindow):
@@ -25,28 +27,53 @@ class Preferences(QMainWindow):
 class Worker(QObject):
     fire_alarm = pyqtSignal(str, str) # (time, message)
 
+    def should_fire_today(self, alarm):
+        today = datetime.datetime.now()
+
+        alarm_date = []
+        if alarm['date']:
+            alarm_date = alarm['date']
+        if today.isoweekday() in alarm['repeat']:
+            alarm_date = [today.year, today.month, today.day]
+
+        if not alarm_date:
+            # Alarm date is not set
+            return False
+
+        datetime_args = alarm_date + alarm['time']
+        alarm = datetime.datetime(*datetime_args)
+        if alarm.date() == today.date() and alarm.time() > today.time():
+            return True
+        return False
+
+    def get_alarms(self):
+        alarms = config.read()["alarms"]
+        for alarm in alarms:
+            if self.should_fire_today(alarm):
+                yield datetime.time(*alarm['time'])
+
     @pyqtSlot()
     def start(self):  # A slot takes no params
-        # Get alarms from config file
-        alarms = [datetime.time(5, 22, sec) for sec in range(0, 10)]
-
         now = datetime.datetime.now()
         prev_alarm_sec = 0
-        for alarm_time in alarms:
-            current_alarm_sec = (datetime.datetime.combine(now.date(), alarm_time) - now).total_seconds()
-            actual_sec = current_alarm_sec - prev_alarm_sec
-            prev_alarm_sec = current_alarm_sec
 
-            time.sleep(actual_sec)
-            time_str = alarm_time.strftime('%H:%M:%S')
-            message = f"Hello there, {time_str}"
-            print(f"Firing the alarm {time_str}")
-            self.fire_alarm.emit(time_str, message)
+        while True:
+            for alarm_time in self.get_alarms():
+                current_alarm_sec = (datetime.datetime.combine(now.date(), alarm_time) - now).total_seconds()
+                actual_sec = current_alarm_sec - prev_alarm_sec
+                prev_alarm_sec = current_alarm_sec
+
+                time.sleep(actual_sec)
+                time_str = alarm_time.strftime('%H:%M:%S')
+                message = f"Hello there, {time_str}"
+                print(f"Firing the alarm {time_str}")
+                self.fire_alarm.emit(time_str, message)
 
 
 class TrayMenu():
     def __init__(self, get_resources):
         self.get_resources = get_resources
+        config.initiate()
 
         # create Worker and Thread
         self.worker = Worker()  # no parent!
