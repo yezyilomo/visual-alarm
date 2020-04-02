@@ -54,6 +54,7 @@ class Worker(QObject):
 
     @pyqtSlot()
     def start(self):  # A slot takes no params
+        print("Hello")
         now = datetime.datetime.now()
         prev_alarm_sec = 0
 
@@ -70,11 +71,14 @@ class Worker(QObject):
                 self.fire_alarm.emit(time_str, message)
 
 
-class TrayMenu():
+class Application():
     def __init__(self, get_resources):
-        self.get_resources = get_resources
-        config.initiate()
+        self.get_resources = get_resources # Get resources
+        config.initiate()  # Initiate configurations
+        self.start_timer_thread()  # Start timer on separate thread
+        self.start_application()  # Start application
 
+    def start_timer_thread(self):
         # create Worker and Thread
         self.worker = Worker()  # no parent!
         self.thread = QThread()  # no parent!
@@ -88,10 +92,8 @@ class TrayMenu():
         # Connect Worker`s Signals to update progressbar.
         self.worker.fire_alarm.connect(self.fire_alarm)
         self.thread.start()
-        
-        self.main()
-    
-    def main(self):
+
+    def start_application(self):
         app = QApplication(sys.argv)
 
         self.trayIcon = QSystemTrayIcon(QIcon("src/main/resources/base/alarm-clock.svg"), app)
@@ -122,12 +124,14 @@ class TrayMenu():
         self.preference = Preferences()
         self.preference.show()
         
+        
     def exit(self):
         sys.exit()
 
+
 class AppContext(ApplicationContext):       # 1. Subclass ApplicationContext
     def run(self):                          # 2. Implement run()
-        window = TrayMenu(self.get_resource)
+        Application(self.get_resource)
         stylesheet = self.get_resource('styles.qss')
         self.app.setStyleSheet(open(stylesheet).read())
         return self.app.exec_()             # 3. End run() with this line
