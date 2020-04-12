@@ -4,7 +4,7 @@ import datetime
 
 from PyQt5.QtWidgets import QSystemTrayIcon, QApplication, QMenu, QMainWindow, QWidget
 from PyQt5.QtGui import QIcon
-from PyQt5.QtCore import pyqtSignal, pyqtSlot, QObject, QThread
+from PyQt5.QtCore import pyqtSignal, pyqtSlot, QObject, QThread, QEventLoop, QTimer
 from fbs_runtime.application_context import ApplicationContext
 
 import config
@@ -33,12 +33,8 @@ class Worker(QObject):
         alarm_date = []
         if alarm['date']:
             alarm_date = alarm['date']
-        if today.isoweekday() in alarm['repeat']:
+        if today.isoweekday() in alarm['repeat'] or not alarm['date']:
             alarm_date = [today.year, today.month, today.day]
-
-        if not alarm_date:
-            # Alarm date is not set
-            return False
 
         datetime_args = alarm_date + alarm['time']
         alarm = datetime.datetime(*datetime_args)
@@ -50,25 +46,43 @@ class Worker(QObject):
         alarms = config.read()["alarms"]
         for alarm in alarms:
             if self.should_fire_today(alarm):
-                yield datetime.time(*alarm['time'])
+                yield datetime.time(*alarm['time']), alarm['title']
+
+    def create_timer(self, time_str, message):
+        # create Worker and Thread
+        def fire_alarm():
+            self.fire_alarm.emit(time_str, message)
+
+        timer = QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(fire_alarm)
+        return timer
+
+    def start_timers(self):
+        alarms = self.get_alarms()
+
+        if self.timers:
+            # All timers have been started already
+            return
+
+        now = datetime.datetime.now()
+        prev_alarm_sec = 0
+        for alarm_time, alarm_title in alarms:
+            current_alarm_sec = (datetime.datetime.combine(now.date(), alarm_time) - now).total_seconds()
+            actual_sec = current_alarm_sec - prev_alarm_sec
+            prev_alarm_sec = current_alarm_sec
+        
+            time_str = alarm_time.strftime('%H:%M:%S')
+            timer = self.create_timer(time_str, alarm_title)
+            self.timers.append(timer)
+            timer.start(actual_sec*1000)
 
     @pyqtSlot()
     def start(self):  # A slot takes no params
-        print("Hello")
-        now = datetime.datetime.now()
-        prev_alarm_sec = 0
-
-        while True:
-            for alarm_time in self.get_alarms():
-                current_alarm_sec = (datetime.datetime.combine(now.date(), alarm_time) - now).total_seconds()
-                actual_sec = current_alarm_sec - prev_alarm_sec
-                prev_alarm_sec = current_alarm_sec
-
-                time.sleep(actual_sec)
-                time_str = alarm_time.strftime('%H:%M:%S')
-                message = f"Hello there, {time_str}"
-                print(f"Firing the alarm {time_str}")
-                self.fire_alarm.emit(time_str, message)
+        print("Starting......")
+        self.is_running = True
+        self.timers = []
+        self.start_timers()
 
 
 class Application():
@@ -103,7 +117,7 @@ class Application():
         self.configureAction.triggered.connect(self.configure)
 
         self.notifyAction = self.menu.addAction('Notification')
-        self.notifyAction.triggered.connect(self.fire_alarm)
+        self.notifyAction.triggered.connect(self.restart_timer)
 
         self.quitAction = self.menu.addAction('Quit')
         self.quitAction.triggered.connect(self.exit)
@@ -111,6 +125,19 @@ class Application():
         self.trayIcon.setContextMenu(self.menu)
         self.trayIcon.show()
         sys.exit(app.exec_())
+
+    def restart_timer(self):  
+        for timer in self.worker.timers:
+            # Stop all timers
+            timer.stop()
+
+        self.thread.disconnect()
+        self.thread.quit()  # This is very important(Quit thread b4 restarting it)
+        self.thread.started.connect(self.worker.start)
+        while self.thread.isRunning():
+            pass
+        else:
+            self.thread.start()
 
     def fire_alarm(self, time, message):
         alarm_data = {
